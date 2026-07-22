@@ -16,14 +16,14 @@ from mmdet.models.utils.transformer import inverse_sigmoid
 from mmdet.models import HEADS
 from mmdet.models.dense_heads import DETRHead
 from mmdet3d.core.bbox.coders import build_bbox_coder
-from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
+from mmdet3d_plugin.core.bbox.util import normalize_bbox
 from mmcv.cnn.bricks.transformer import build_positional_encoding
 from mmcv.runner import force_fp32, auto_fp16
-from projects.mmdet3d_plugin.models.utils.bricks import run_time
+from mmdet3d_plugin.models.utils.bricks import run_time
 import numpy as np
 import mmcv
 import cv2 as cv
-from projects.mmdet3d_plugin.models.utils.visual import save_tensor
+from mmdet3d_plugin.models.utils.visual import save_tensor
 
 
 @HEADS.register_module()

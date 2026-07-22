@@ -7,7 +7,7 @@ from mmcv import Config, DictAction
 
 from mmdet3d.models import build_model
 from mmdet3d.datasets import build_dataset
-from projects.mmdet3d_plugin.datasets.builder import build_dataloader
+from mmdet3d_plugin.datasets.builder import build_dataloader
 
 # try:
 #     from mmcv.cnn import get_model_complexity_info

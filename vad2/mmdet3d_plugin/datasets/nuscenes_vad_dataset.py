@@ -16,12 +16,12 @@ import numpy as np
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from .vad_custom_nuscenes_eval import NuScenesEval_custom
 from nuscenes.eval.common.utils import center_distance
-from projects.mmdet3d_plugin.models.utils.visual import save_tensor
+from mmdet3d_plugin.models.utils.visual import save_tensor
 from mmcv.parallel import DataContainer as DC
 import random
 from mmdet3d.core import LiDARInstance3DBoxes
 from nuscenes.utils.data_classes import Box as NuScenesBox
-from projects.mmdet3d_plugin.core.bbox.structures.nuscenes_box import CustomNuscenesBox
+from mmdet3d_plugin.core.bbox.structures.nuscenes_box import CustomNuscenesBox
 from shapely import affinity, ops
 from shapely.geometry import LineString, box, MultiPolygon, MultiLineString
 from mmdet.datasets.pipelines import to_tensor
@@ -1673,8 +1673,8 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         detail['{}/mAP'.format(metric_prefix)] = metrics['mean_ap']
 
 
-        from projects.mmdet3d_plugin.datasets.map_utils.mean_ap import eval_map
-        from projects.mmdet3d_plugin.datasets.map_utils.mean_ap import format_res_gt_by_classes
+        from mmdet3d_plugin.datasets.map_utils.mean_ap import eval_map
+        from mmdet3d_plugin.datasets.map_utils.mean_ap import format_res_gt_by_classes
         result_path = osp.abspath(result_path)
         
         print('Formating results & gts by classes')

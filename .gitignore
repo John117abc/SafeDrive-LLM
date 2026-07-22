@@ -240,3 +240,8 @@ train/logs/
 
 # Conda
 *.egg-info/
+
+# agent
+AGENTS.md
+
+project_struct.md

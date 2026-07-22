@@ -22,8 +22,8 @@ from nuscenes.eval.common.data_classes import EvalBoxes, EvalBox
 from nuscenes.eval.detection.utils import category_to_detection_name
 from nuscenes.utils.geometry_utils import view_points, box_in_image, BoxVisibility
 
-from projects.mmdet3d_plugin.core.bbox.structures.nuscenes_box import CustomNuscenesBox, CustomDetectionBox, color_map
-from projects.mmdet3d_plugin.datasets.nuscenes_vad_dataset import VectorizedLocalMap, LiDARInstanceLines
+from mmdet3d_plugin.core.bbox.structures.nuscenes_box import CustomNuscenesBox, CustomDetectionBox, color_map
+from mmdet3d_plugin.datasets.nuscenes_vad_dataset import VectorizedLocalMap, LiDARInstanceLines
 
 
 cams = ['CAM_FRONT',

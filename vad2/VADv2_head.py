@@ -21,12 +21,12 @@ from mmdet.core import (multi_apply, multi_apply, reduce_mean)
 from mmdet3d.models.builder import build_backbone
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
 
-from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
-from projects.mmdet3d_plugin.PIPP.utils.map_utils import (
+from mmdet3d_plugin.core.bbox.util import normalize_bbox
+from mmdet3d_plugin.PIPP.utils.map_utils import (
     normalize_2d_pts, normalize_2d_bbox, denormalize_2d_pts, denormalize_2d_bbox
 )
-from projects.mmdet3d_plugin.PIPP.utils.functional import pos2posemb2d
-from projects.mmdet3d_plugin.PIPP.utils.plan_loss import segments_intersect
+from mmdet3d_plugin.PIPP.utils.functional import pos2posemb2d
+from mmdet3d_plugin.PIPP.utils.plan_loss import segments_intersect
 from shapely.geometry import LineString
 
 

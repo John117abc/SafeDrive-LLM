@@ -2,7 +2,7 @@ import torch
 
 from mmdet.core.bbox import BaseBBoxCoder
 from mmdet.core.bbox.builder import BBOX_CODERS
-from projects.mmdet3d_plugin.VAD.utils.map_utils import (
+from mmdet3d_plugin.VAD.utils.map_utils import (
     denormalize_2d_pts, denormalize_2d_bbox
 )
 

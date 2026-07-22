@@ -7,8 +7,8 @@ from mmcv.parallel import MMDataParallel
 from mmcv.runner import load_checkpoint, wrap_fp16_model
 import sys
 sys.path.append('.')
-from projects.mmdet3d_plugin.datasets.builder import build_dataloader
-from projects.mmdet3d_plugin.datasets import custom_build_dataset
+from mmdet3d_plugin.datasets.builder import build_dataloader
+from mmdet3d_plugin.datasets import custom_build_dataset
 # from mmdet3d.datasets import build_dataloader, build_dataset
 from mmdet3d.models import build_detector
 #from tools.misc.fuse_conv_bn import fuse_module
