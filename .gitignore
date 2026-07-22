@@ -216,3 +216,27 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SafeDrive-LLM project specific
+# Checkpoints
+vad2/checkpoints/*.pth
+*.pth
+
+# Data files (large)
+data/raw/
+data/processed/*.pkl
+data/processed/*.json
+data/carla/sim_images/*.png
+data/carla/sim_images/*.jpg
+
+# Training outputs
+work_dirs/
+train/logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# Conda
+*.egg-info/

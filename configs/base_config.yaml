@@ -1,0 +1,20 @@
+# SafeDrive-LLM 基础配置
+
+# 数据路径
+data:
+  nuscenes_root: "data/raw/nuScenes"
+  can_bus_root: "data/raw/can_bus"
+  processed_dir: "data/processed"
+  carla_dir: "data/carla"
+
+# 模型参数
+model:
+  pretrained_weights: "vad2/checkpoints/vad2_baseline.pth"
+  
+# 训练超参
+train:
+  batch_size: 1
+  learning_rate: 2e-4
+  epochs: 48
+  lambda_hard: 0.5
+  lambda_commonsense: 0.5

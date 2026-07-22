@@ -1,0 +1,17 @@
+# SafeDrive-LLM 项目依赖
+# 基于 VAD 项目环境，Python 3.7 + PyTorch 1.9.1 + CUDA 11.1
+# 完整依赖列表见 requirements_full.txt
+
+torch==1.9.1+cu111
+torchvision==0.10.1+cu111
+torchaudio==0.9.1
+mmcv-full==1.4.0
+mmdet==2.14.0
+mmdet3d==0.17.1
+mmsegmentation==0.14.1
+spconv-cu111
+nuscenes-devkit
+numpy
+opencv-python
+tqdm
+pyyaml
