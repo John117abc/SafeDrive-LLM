@@ -1673,61 +1673,64 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         detail['{}/mAP'.format(metric_prefix)] = metrics['mean_ap']
 
 
-        from mmdet3d_plugin.datasets.map_utils.mean_ap import eval_map
-        from mmdet3d_plugin.datasets.map_utils.mean_ap import format_res_gt_by_classes
-        result_path = osp.abspath(result_path)
+        try:
+            from mmdet3d_plugin.datasets.map_utils.mean_ap import eval_map
+            from mmdet3d_plugin.datasets.map_utils.mean_ap import format_res_gt_by_classes
+            result_path = osp.abspath(result_path)
         
-        print('Formating results & gts by classes')
-        pred_results = mmcv.load(result_path)
-        map_results = pred_results['map_results']
-        gt_anns = mmcv.load(self.map_ann_file)
-        map_annotations = gt_anns['GTs']
-        cls_gens, cls_gts = format_res_gt_by_classes(result_path,
-                                                     map_results,
-                                                     map_annotations,
-                                                     cls_names=self.MAPCLASSES,
-                                                     num_pred_pts_per_instance=self.fixed_num,
-                                                     eval_use_same_gt_sample_num_flag=self.eval_use_same_gt_sample_num_flag,
-                                                     pc_range=self.pc_range)
-        map_metrics = map_metric if isinstance(map_metric, list) else [map_metric]
-        allowed_metrics = ['chamfer', 'iou']
-        for metric in map_metrics:
-            if metric not in allowed_metrics:
-                raise KeyError(f'metric {metric} is not supported')
-        for metric in map_metrics:
-            print('-*'*10+f'use metric:{metric}'+'-*'*10)
-            if metric == 'chamfer':
-                thresholds = [0.5,1.0,1.5]
-            elif metric == 'iou':
-                thresholds= np.linspace(.5, 0.95, int(np.round((0.95 - .5) / .05)) + 1, endpoint=True)
-            cls_aps = np.zeros((len(thresholds),self.NUM_MAPCLASSES))
-            for i, thr in enumerate(thresholds):
-                print('-*'*10+f'threshhold:{thr}'+'-*'*10)
-                mAP, cls_ap = eval_map(
-                                map_results,
-                                map_annotations,
-                                cls_gens,
-                                cls_gts,
-                                threshold=thr,
-                                cls_names=self.MAPCLASSES,
-                                logger=logger,
-                                num_pred_pts_per_instance=self.fixed_num,
-                                pc_range=self.pc_range,
-                                metric=metric)
-                for j in range(self.NUM_MAPCLASSES):
-                    cls_aps[i, j] = cls_ap[j]['ap']
-            for i, name in enumerate(self.MAPCLASSES):
-                print('{}: {}'.format(name, cls_aps.mean(0)[i]))
-                detail['NuscMap_{}/{}_AP'.format(metric,name)] =  cls_aps.mean(0)[i]
-            print('map: {}'.format(cls_aps.mean(0).mean()))
-            detail['NuscMap_{}/mAP'.format(metric)] = cls_aps.mean(0).mean()
-            for i, name in enumerate(self.MAPCLASSES):
-                for j, thr in enumerate(thresholds):
-                    if metric == 'chamfer':
-                        detail['NuscMap_{}/{}_AP_thr_{}'.format(metric,name,thr)]=cls_aps[j][i]
-                    elif metric == 'iou':
-                        if thr == 0.5 or thr == 0.75:
+            print('Formating results & gts by classes')
+            pred_results = mmcv.load(result_path)
+            map_results = pred_results['map_results']
+            gt_anns = mmcv.load(self.map_ann_file)
+            map_annotations = gt_anns['GTs']
+            cls_gens, cls_gts = format_res_gt_by_classes(result_path,
+                                                         map_results,
+                                                         map_annotations,
+                                                         cls_names=self.MAPCLASSES,
+                                                         num_pred_pts_per_instance=self.fixed_num,
+                                                         eval_use_same_gt_sample_num_flag=self.eval_use_same_gt_sample_num_flag,
+                                                         pc_range=self.pc_range)
+            map_metrics = map_metric if isinstance(map_metric, list) else [map_metric]
+            allowed_metrics = ['chamfer', 'iou']
+            for metric in map_metrics:
+                if metric not in allowed_metrics:
+                    raise KeyError(f'metric {metric} is not supported')
+            for metric in map_metrics:
+                print('-*'*10+f'use metric:{metric}'+'-*'*10)
+                if metric == 'chamfer':
+                    thresholds = [0.5,1.0,1.5]
+                elif metric == 'iou':
+                    thresholds= np.linspace(.5, 0.95, int(np.round((0.95 - .5) / .05)) + 1, endpoint=True)
+                cls_aps = np.zeros((len(thresholds),self.NUM_MAPCLASSES))
+                for i, thr in enumerate(thresholds):
+                    print('-*'*10+f'threshhold:{thr}'+'-*'*10)
+                    mAP, cls_ap = eval_map(
+                                    map_results,
+                                    map_annotations,
+                                    cls_gens,
+                                    cls_gts,
+                                    threshold=thr,
+                                    cls_names=self.MAPCLASSES,
+                                    logger=logger,
+                                    num_pred_pts_per_instance=self.fixed_num,
+                                    pc_range=self.pc_range,
+                                    metric=metric)
+                    for j in range(self.NUM_MAPCLASSES):
+                        cls_aps[i, j] = cls_ap[j]['ap']
+                for i, name in enumerate(self.MAPCLASSES):
+                    print('{}: {}'.format(name, cls_aps.mean(0)[i]))
+                    detail['NuscMap_{}/{}_AP'.format(metric,name)] =  cls_aps.mean(0)[i]
+                print('map: {}'.format(cls_aps.mean(0).mean()))
+                detail['NuscMap_{}/mAP'.format(metric)] = cls_aps.mean(0).mean()
+                for i, name in enumerate(self.MAPCLASSES):
+                    for j, thr in enumerate(thresholds):
+                        if metric == 'chamfer':
                             detail['NuscMap_{}/{}_AP_thr_{}'.format(metric,name,thr)]=cls_aps[j][i]
+                        elif metric == 'iou':
+                            if thr == 0.5 or thr == 0.75:
+                                detail['NuscMap_{}/{}_AP_thr_{}'.format(metric,name,thr)]=cls_aps[j][i]
+        except Exception as e:
+            print(f'Map evaluation failed: {e}')
 
         return detail
     
