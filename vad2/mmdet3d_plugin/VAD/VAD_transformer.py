@@ -1,3 +1,19 @@
+# ============================ VADPerceptionTransformer — BEV 特征提取 ============================
+# 核心作用：将多视角 2D 图像特征转换为统一的 3D BEV（鸟瞰图）特征。
+#
+# forward() 流程（3 个阶段）：
+#   1. get_bev_features(): BEVFormer Encoder（时序自注意力 + 空间交叉注意力）
+#      → BEV 特征 [bev_h*bev_w, batch, 256]
+#   2. Detection Decoder: object query 与 BEV 特征交叉注意力
+#      → intermediate states [num_dec_layers, num_query, batch, 256]
+#   3. Map Decoder: map query 与 BEV 特征交叉注意力
+#      → map intermediate states [num_dec_layers, num_map_query, batch, 256]
+#
+# 时序融合机制（get_bev_features 内部）:
+#   根据自车运动，将上一帧的 BEV 特征旋转/平移对齐到当前帧坐标
+#   → concat(prev_BEV_aligned, current_can_bus) → 送入 encoder
+# =======================================================================================
+
 import torch
 import numpy as np
 import torch.nn as nn
@@ -324,43 +340,24 @@ class VADPerceptionTransformer(BaseModule):
                 map_cls_branches=None,                
                 prev_bev=None,            
                 **kwargs):
-        """Forward function for `Detr3DTransformer`.
-        Args:
-            mlvl_feats (list(Tensor)): Input queries from
-                different level. Each element has shape
-                [bs, num_cams, embed_dims, h, w].
-            bev_queries (Tensor): (bev_h*bev_w, c)
-            bev_pos (Tensor): (bs, embed_dims, bev_h, bev_w)
-            object_query_embed (Tensor): The query embedding for decoder,
-                with shape [num_query, c].
-            reg_branches (obj:`nn.ModuleList`): Regression heads for
-                feature maps from each decoder layer. Only would
-                be passed when `with_box_refine` is True. Default to None.
+        """Transformer 前向传播——BEV 编码 + 双路解码。
+
+        流程:
+        1. get_bev_features: 多视角图像 → BEV 特征（3 层 BEVFormer encoder）
+        2. Detection Decoder: object query 与 BEV 交叉注意力 → 检测中间状态
+        3. Map Decoder: map query 与 BEV 交叉注意力 → 地图中间状态
+
         Returns:
-            tuple[Tensor]: results of decoder containing the following tensor.
-                - bev_embed: BEV features
-                - inter_states: Outputs from decoder. If
-                    return_intermediate_dec is True output has shape \
-                      (num_dec_layers, bs, num_query, embed_dims), else has \
-                      shape (1, bs, num_query, embed_dims).
-                - init_reference_out: The initial value of reference \
-                    points, has shape (bs, num_queries, 4).
-                - inter_references_out: The internal value of reference \
-                    points in decoder, has shape \
-                    (num_dec_layers, bs,num_query, embed_dims)
-                - enc_outputs_class: The classification score of \
-                    proposals generated from \
-                    encoder's feature maps, has shape \
-                    (batch, h*w, num_classes). \
-                    Only would be returned when `as_two_stage` is True, \
-                    otherwise None.
-                - enc_outputs_coord_unact: The regression results \
-                    generated from encoder's feature maps., has shape \
-                    (batch, h*w, 4). Only would \
-                    be returned when `as_two_stage` is True, \
-                    otherwise None.
+            bev_embed (Tensor): BEV 特征 [Q, B, 256]
+            inter_states (Tensor): 检测 decoder 输出 [L, Q, B, 256]
+            init_reference (Tensor): 初始参考点 [B, Q, 3]
+            inter_references (Tensor): 各层参考点 [L, B, Q, 3]
+            map_inter_states (Tensor): 地图 decoder 输出 [L, Q_map, B, 256]
+            map_init_reference (Tensor): 地图初始参考点 [B, Q_map, 2]
+            map_inter_references (Tensor): 地图各层参考点 [L, B, Q_map, 2]
         """
 
+        # ========== 阶段 1: BEV 特征提取（时序融合 + 空间交叉注意力） ==========
         bev_embed = self.get_bev_features(
             mlvl_feats,
             bev_queries,
@@ -394,6 +391,7 @@ class VADPerceptionTransformer(BaseModule):
         map_query_pos = map_query_pos.permute(1, 0, 2)
         bev_embed = bev_embed.permute(1, 0, 2)
 
+        # ========== 阶段 2: 检测 Decoder（object query ↔ BEV 交叉注意力） ==========
         if self.decoder is not None:
             # [L, Q, B, D], [L, B, Q, D]
             inter_states, inter_references = self.decoder(
@@ -412,6 +410,7 @@ class VADPerceptionTransformer(BaseModule):
             inter_states = query.unsqueeze(0)
             inter_references_out = reference_points.unsqueeze(0)
 
+        # ========== 阶段 3: 地图 Decoder（map query ↔ BEV 交叉注意力） ==========
         if self.map_decoder is not None:
             # [L, Q, B, D], [L, B, Q, D]
             map_inter_states, map_inter_references = self.map_decoder(

@@ -106,6 +106,21 @@ def parse_args():
 
 
 def main():
+    """训练入口 — 完整的训练启动流程。
+
+    步骤:
+    1. 加载配置文件 Config.fromfile(args.config)
+    2. 动态导入插件模块（mmdet3d_plugin/），注册所有 @DETECTORS/@HEADS/@TRANSFORMER
+    3. build_model(cfg.model) — 通过 mmdet3d registry 实例化整个模型
+    4. build_dataset(cfg.data.train) — 构建 nuScenes 数据集 + 数据加载器
+    5. custom_train_model(model, datasets, cfg, ...) — 启动训练循环
+       ├─ 内部封装 EpochBasedRunner
+       ├─ 注册 OptimizerHook（loss.sum().backward()）
+       └─ runner.run(data_loaders, workflow)
+
+    推荐使用方法: bash vad2/tools/dist_train.sh <config> <num_gpus>
+    该脚本自动设置 PYTHONPATH 和分布式参数。
+    """
     args = parse_args()
 
     cfg = Config.fromfile(args.config)

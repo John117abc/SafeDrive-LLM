@@ -1,3 +1,21 @@
+# ============================ VAD — 检测器主入口 ============================
+# VAD 是整个模型的顶层包装器（继承自 mmdet3d 的 MVXTwoStageDetector）。
+#
+# 训练流程：
+#   forward_train()  → 提取特征 → forward_pts_train() → pts_bbox_head.forward() → pts_bbox_head.loss()
+#   返回 loss_dict → mmcv Runner 求和 → 自动 backward
+#
+# 核心思想（两阶段调用模式）：
+#   - pts_bbox_head.__call__():  前向传播，返回所有预测结果（outs 字典）
+#   - pts_bbox_head.loss():      从 outs 和 GT 计算所有损失
+#   这种"先预测、再算损"的模式让你可以在两次调用之间插入新的辅助头
+#
+# 测试流程：
+#   forward_test() → simple_test() → pts_bbox_head() + pts_bbox_head.get_bboxes()
+#
+# 如果要添加新的辅助头，修改点在这个文件中很少——主要在 VAD_head.py 中。
+# ========================================================================
+
 import time
 import copy
 
@@ -121,23 +139,25 @@ class VAD(MVXTwoStageDetector):
                           ego_fut_cmd=None,
                           ego_lcf_feat=None,
                           gt_attr_labels=None):
-        """Forward function'
-        Args:
-            pts_feats (list[torch.Tensor]): Features of point cloud branch
-            gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`]): Ground truth
-                boxes for each sample.
-            gt_labels_3d (list[torch.Tensor]): Ground truth labels for
-                boxes of each sampole
-            img_metas (list[dict]): Meta information of samples.
-            gt_bboxes_ignore (list[torch.Tensor], optional): Ground truth
-                boxes to be ignored. Defaults to None.
-            prev_bev (torch.Tensor, optional): BEV features of previous frame.
-        Returns:
-            dict: Losses of each branch.
-        """
+        """感知+规划的核心前向传播 + 损失计算。
 
+        两阶段调用模式：
+        1. pts_bbox_head(pts_feats, ...) → outs 字典（所有预测）
+        2. pts_bbox_head.loss(gt_*, outs, ...) → loss 字典
+        
+        如果你要添加辅助头，在步骤 1 和 2 之间时：
+        - 从 outs 中提取中间结果
+        - 用你的辅助头计算额外预测
+        - 将额外预测加入 loss_inputs
+        但更推荐在 VAD_head.py 内部添加（见其文件头注释）。
+
+        Returns:
+            dict: 损失字典，例如 {'loss_cls': ..., 'loss_plan_reg': ..., ...}
+        """
+        # 步骤 1: 前向传播 — 通过 VADHead 获得所有预测
         outs = self.pts_bbox_head(pts_feats, img_metas, prev_bev,
                                   ego_his_trajs=ego_his_trajs, ego_lcf_feat=ego_lcf_feat)
+        # 步骤 2: 损失计算 — 用 GT 和预测计算所有损失
         loss_inputs = [
             gt_bboxes_3d, gt_labels_3d, map_gt_bboxes_3d, map_gt_labels_3d,
             outs, ego_fut_trajs, ego_fut_masks, ego_fut_cmd, gt_attr_labels
@@ -150,14 +170,14 @@ class VAD(MVXTwoStageDetector):
         return self.forward_test(img=img, img_metas=[[dummy_metas]])
 
     def forward(self, return_loss=True, **kwargs):
-        """Calls either forward_train or forward_test depending on whether
-        return_loss=True.
-        Note this setting will change the expected inputs. When
-        `return_loss=True`, img and img_metas are single-nested (i.e.
-        torch.Tensor and list[dict]), and when `resturn_loss=False`, img and
-        img_metas should be double nested (i.e.  list[torch.Tensor],
-        list[list[dict]]), with the outer list indicating test time
-        augmentations.
+        """训练/测试分派器。return_loss=True → 训练，False → 测试。
+
+        mmcv Runner 调用 model(**batch, return_loss=True)，batch 中的键
+        来自 dataset 的 __getitem__ 和 collate_fn。kwargs 包括：
+        - img: 多视角图像 [B, N, C, H, W]
+        - img_metas: 图像元信息
+        - gt_bboxes_3d, gt_labels_3d: 3D 检测 GT
+        - ego_fut_trajs, ego_fut_masks, ego_fut_cmd: 规划 GT
         """
         if return_loss:
             return self.forward_train(**kwargs)
@@ -207,42 +227,41 @@ class VAD(MVXTwoStageDetector):
                       ego_lcf_feat=None,
                       gt_attr_labels=None
                       ):
-        """Forward training function.
+        """训练前向入口 —— 从图像到损失的完整链路。
+
+        流程（3 步）：
+        1. 历史 BEV 提取:   将前 N-1 帧图像送入 encoder（eval 模式，无梯度）
+           得到 prev_bev，用于当前帧的时序融合
+        2. 图像特征提取:    将当前帧通过 img_backbone (ResNet-50) → img_neck (FPN)
+           得到多尺度图像特征 img_feats
+        3. 感知+规划前向:   将 img_feats 送入 forward_pts_train()
+           该函数内部调用 VADHead.forward() → VADHead.loss()
+
         Args:
-            points (list[torch.Tensor], optional): Points of each sample.
-                Defaults to None.
-            img_metas (list[dict], optional): Meta information of each sample.
-                Defaults to None.
-            gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`], optional):
-                Ground truth 3D boxes. Defaults to None.
-            gt_labels_3d (list[torch.Tensor], optional): Ground truth labels
-                of 3D boxes. Defaults to None.
-            gt_labels (list[torch.Tensor], optional): Ground truth labels
-                of 2D boxes in images. Defaults to None.
-            gt_bboxes (list[torch.Tensor], optional): Ground truth 2D boxes in
-                images. Defaults to None.
-            img (torch.Tensor optional): Images of each sample with shape
-                (N, C, H, W). Defaults to None.
-            proposals ([list[torch.Tensor], optional): Predicted proposals
-                used for training Fast RCNN. Defaults to None.
-            gt_bboxes_ignore (list[torch.Tensor], optional): Ground truth
-                2D boxes in images to be ignored. Defaults to None.
+            img (Tensor): 多帧图像 [B, N_frames, N_cams, C, H, W]
+                          最后 1 帧是当前帧，前面的帧用于提取历史 BEV
+            ego_fut_trajs (Tensor): 自车未来 GT 轨迹 [B, fut_ts, 2]
+            ego_fut_masks (Tensor): 有效时间步掩码 [B, fut_ts]
+            ego_fut_cmd (Tensor): GT 高层指令 [B, ego_fut_mode=3]
         Returns:
-            dict: Losses of different branches.
+            dict: 损失字典（由 VADHead.loss() 返回的所有损失）
         """
         
-        len_queue = img.size(1)
-        prev_img = img[:, :-1, ...]
-        img = img[:, -1, ...]
+        len_queue = img.size(1)  # 时序队列长度（通常为 2-4）
+        # 分离历史帧和当前帧
+        prev_img = img[:, :-1, ...]  # 前 N-1 帧：历史帧
+        img = img[:, -1, ...]         # 最后一帧：当前帧
 
         prev_img_metas = copy.deepcopy(img_metas)
-        # prev_bev = self.obtain_history_bev(prev_img, prev_img_metas)
-        # import pdb;pdb.set_trace()
+        # 提取历史 BEV 特征（eval 模式，无梯度反传 — 节省显存）
         prev_bev = self.obtain_history_bev(prev_img, prev_img_metas) if len_queue > 1 else None
 
+        # 当前帧的图像特征提取
         img_metas = [each[len_queue-1] for each in img_metas]
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
+
         losses = dict()
+        # 感知 + 规划的完整前向与损失计算
         losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d, gt_labels_3d,
                                             map_gt_bboxes_3d, map_gt_labels_3d, img_metas,
                                             gt_bboxes_ignore, map_gt_bboxes_ignore, prev_bev,

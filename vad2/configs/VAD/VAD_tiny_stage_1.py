@@ -1,3 +1,20 @@
+# ============================ VAD-Tiny 阶段 1 训练配置 ============================
+# 
+# 训练目标: 感知（检测 + 地图）+ 运动预测
+# 规划损失在本阶段权重为 0（仅阶段 2 开启）
+#
+# 关键超参数:
+#   total_epochs = 48           — 训练 48 个 epoch
+#   queue_length = 3            — 每段序列包含 3 帧（最后一帧为当前帧）
+#   img_norm_cfg: to_rgb=True   — 自己训练的用 RGB 格式（官方权重用 to_rgb=False）
+#   bev_h=100, bev_w=100        — Tiny 的 BEV 分辨率
+#   embed_dims=256              — 特征维度
+#   ego_fut_mode=3              — 3 种规划模式（左/直/右）
+#   fut_ts=6, valid_fut_ts=6   — 未来 3 秒（每步 0.5s）
+#   ego_his_encoder=None        — 不使用历史轨迹编码器
+#   loss_plan_reg/bound/col/dir  — weight=0.0（本阶段不训练规划）
+# ================================================================================
+
 _base_ = [
     '../datasets/custom_nus-3d.py',
     '../_base_/default_runtime.py'
@@ -42,8 +59,13 @@ _num_levels_ = 1
 bev_h_ = 100
 bev_w_ = 100
 queue_length = 3 # each sequence contains `queue_length` frames.
-total_epochs = 48
+total_epochs = 48  # 阶段 1 训练轮数
 
+# ==================== 模型配置 ====================
+# type='VAD' → 注册为 VAD 检测器（VAD.py 中的类）
+# img_backbone: ResNet-50（冻结第 1 阶段） + FPN 颈部
+# pts_bbox_head: VADHead（核心模块，所有训练/推理逻辑所在）
+# ================================================
 model = dict(
     type='VAD',
     use_grid_mask=True,
@@ -284,6 +306,10 @@ model = dict(
         loss_map_iou=dict(type='GIoULoss', loss_weight=0.0),
         loss_map_pts=dict(type='PtsL1Loss', loss_weight=1.0),
         loss_map_dir=dict(type='PtsDirCosLoss', loss_weight=0.005),
+        # ==================== 规划损失权重 ====================
+        # 阶段 1: 全部设 0 — 这个阶段不训练规划头
+        # 阶段 2: loss_plan_reg=1.0, bound=1.0, col=1.0, dir=0.5
+        # =====================================================
         loss_plan_reg=dict(type='L1Loss', loss_weight=0.0),
         loss_plan_bound=dict(type='PlanMapBoundLoss', loss_weight=0.0),
         loss_plan_col=dict(type='PlanCollisionLoss', loss_weight=0.0),
@@ -404,6 +430,10 @@ data = dict(
     nonshuffler_sampler=dict(type='DistributedSampler')
 )
 
+# ==================== 优化器 & 学习率 ====================
+# AdamW, lr=2e-4, backbone 的学习率 ×0.1
+# 余弦退火 + 线性 warmup
+# ===================================================
 optimizer = dict(
     type='AdamW',
     lr=2e-4,

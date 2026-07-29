@@ -1,3 +1,23 @@
+# ============================ VADHead — 核心 Head 模块 ============================
+# 此文件是整个 VAD 模型最核心的部分，包含：
+# 1. 检测头（cls_branch, reg_branch）         — 3D 目标检测
+# 2. 地图头（map_cls/reg_branch）              — 车道线/道路边界检测
+# 3. 运动预测头（motion_decoder + traj_branch） — 周围 agent 的未来轨迹预测
+# 4. 规划头（ego_fut_decoder）                 — 自车未来轨迹规划（★扩展点）
+#
+# 训练流程（forward + loss）：
+#   forward():  BEV 编码 → 检测解码 → 地图解码 → 运动预测 → ego 特征融合 → 规划输出
+#   loss():     组装所有损失（检测 + 地图 + 运动 + 规划），返回 loss_dict
+#   梯度反传:   mmcv Runner 对 loss_dict 求和后自动 backward
+#
+# ================================= 扩展点说明 =====================================
+# 如果你要在 VAD 基础上添加新的辅助头（如硬约束头、常识蒸馏头），需要修改 4 处：
+#   [扩展点 1] __init__() 中：构建新头的网络模块（并行于 ego_fut_decoder，约 L417-424）
+#   [扩展点 2] forward() 中：使用 ego_feats 张量调用新头，将输出存入 outs 字典（约 L791-794）
+#   [扩展点 3] __init__() 中：通过 build_loss() 注册新的损失函数（约 L274-284）
+#   [扩展点 4] loss() 中：计算新头的损失并加入 loss_dict（约 L1634-1638）
+# ================================================================================
+
 import copy
 from math import pi, cos, sin
 
@@ -271,6 +291,8 @@ class VADHead(DETRHead):
             sampler_cfg = dict(type='PseudoSampler')
             self.map_sampler = build_sampler(sampler_cfg, context=self)
         
+        # ==================== 损失函数注册 ====================
+        # NOTE: [扩展点 3] 如果要添加新的辅助损失（硬约束/常识蒸馏），在此处注册
         self.loss_traj = build_loss(loss_traj)
         self.loss_traj_cls = build_loss(loss_traj_cls)
         self.loss_map_bbox = build_loss(loss_map_bbox)
@@ -285,6 +307,7 @@ class VADHead(DETRHead):
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
+        # ==================== 检测头：目标类别 + 3D 检测框回归 ====================
         cls_branch = []
         for _ in range(self.num_reg_fcs):
             cls_branch.append(Linear(self.embed_dims, self.embed_dims))
@@ -300,6 +323,7 @@ class VADHead(DETRHead):
         reg_branch.append(Linear(self.embed_dims, self.code_size))
         reg_branch = nn.Sequential(*reg_branch)
 
+        # ==================== 运动预测头：周围 agent 的未来轨迹预测 ====================
         traj_branch = []
         for _ in range(self.num_reg_fcs):
             traj_branch.append(Linear(self.embed_dims*2, self.embed_dims*2))
@@ -315,6 +339,7 @@ class VADHead(DETRHead):
         traj_cls_branch.append(Linear(self.embed_dims*2, self.traj_num_cls))
         traj_cls_branch = nn.Sequential(*traj_cls_branch)
 
+        # ==================== 地图头：车道线/道路边界检测 ====================
         map_cls_branch = []
         for _ in range(self.num_reg_fcs):
             map_cls_branch.append(Linear(self.embed_dims, self.embed_dims))
@@ -399,6 +424,22 @@ class VADHead(DETRHead):
             if self.use_pe:
                 self.pos_mlp = nn.Linear(2, self.embed_dims)
         
+        # ==================== 自车（Ego）规划模块 — 核心组件 ====================
+        # 
+        # 自车规划的数据流（forward 中的对应步骤见 L709-794）：
+        #   1. ego_his_encoder: 编码自车历史轨迹 → ego_his_feats [B, 1, D]
+        #      或 ego_query:    可学习嵌入（当无历史编码器时）
+        #   2. ego_agent_decoder: ego query 与周围 agent query 交叉注意力 → ego_agent_query
+        #      目的：让自车"看到"并理解周围车辆的意图
+        #   3. ego_map_decoder: ego_agent_query 与地图 query 交叉注意力 → ego_map_query  
+        #      目的：让自车"看到"车道线/道路拓扑结构
+        #   4. ego_feats = concat(ego相关特征, ego_map_query) → [B, 1, 2D]
+        #   5. ego_fut_decoder(ego_feats) → 规划轨迹 [B, ego_fut_mode=3, fut_ts=6, 2]
+        #
+        # NOTE: [扩展点 1] 在此处并行构建新的辅助头（硬约束头/常识蒸馏头）
+        #   辅助头接受 ego_feats [B, 1, 2D] 作为输入，输出风险信号/常识标签
+        # ================================================================
+        
         if self.ego_his_encoder is not None:
             self.ego_his_encoder = LaneNet(2, self.embed_dims//2, 3)
         else:
@@ -414,6 +455,11 @@ class VADHead(DETRHead):
             if self.use_pe:
                 self.ego_map_pos_mlp = nn.Linear(2, self.embed_dims)
 
+        # ==================== 规划头 MLP 解码器 ====================
+        # 输入: ego_feats [B, 1, 2D]（ego-agent + ego-map 融合特征）
+        # 输出: ego_fut_trajs [B, ego_fut_mode=3, fut_ts=6, 2]
+        # ego_fut_mode: 3 个高层指令（左转/直行/右转）
+        # fut_ts: 未来 6 个时间步（每步 0.5s，共 3 秒）
         ego_fut_decoder = []
         ego_fut_dec_in_dim = self.embed_dims*2 + len(self.ego_lcf_feat_idx) \
             if self.ego_lcf_feat_idx is not None else self.embed_dims*2
@@ -487,21 +533,31 @@ class VADHead(DETRHead):
                 ego_lcf_feat=None,
             ):
         """Forward function.
-        Args:
-            mlvl_feats (tuple[Tensor]): Features from the upstream
-                network, each is a 5D-tensor with shape
-                (B, N, C, H, W).
-            prev_bev: previous bev featues
-            only_bev: only compute BEV features with encoder. 
-        Returns:
-            all_cls_scores (Tensor): Outputs from the classification head, \
-                shape [nb_dec, bs, num_query, cls_out_channels]. Note \
-                cls_out_channels should includes background.
-            all_bbox_preds (Tensor): Sigmoid outputs from the regression \
-                head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
-                Shape [nb_dec, bs, num_query, 9].
-        """
         
+        ==================== 训练前向传播流程（6 个阶段） ====================
+        阶段 1 [BEV 编码]:     多视角图像 → BEVFormer Encoder → BEV 特征 [Q, B, 256]
+        阶段 2 [检测解码]:     object query + BEV 特征 → 3D 检测框 + 类别
+        阶段 3 [地图解码]:     map query + BEV 特征 → 车道线/道路边界
+        阶段 4 [运动预测]:     agent query 多模态扩展 → 周围车辆未来轨迹 [A, fut_mode, fut_ts, 2]
+        阶段 5 [自车规划]:     ego↔agent↔map 交叉注意力 → ego_feats → ego_fut_decoder → 自车轨迹
+                               ★ [扩展点 2]：在此阶段的 ego_feats 张量上并行添加辅助头
+        阶段 6 [输出组装]:     所有预测打包为 outs 字典返回，供 loss() 计算损失
+        
+        Args:
+            mlvl_feats (tuple[Tensor]): 多尺度图像特征，每个 [B, N（相机数）, C, H, W]
+            prev_bev: 上一帧的 BEV 特征（时序融合用）
+            only_bev: 是否只计算 BEV 特征（提取历史 BEV 时使用）
+            ego_his_trajs: 自车历史轨迹 [B, ?, 2]
+            ego_lcf_feat: 自车 LCF 特征（可选制导信号）
+        Returns:
+            outs (dict): 包含所有预测结果的字典，关键 key:
+                - 'ego_fut_preds': 自车规划轨迹 [B, ego_fut_mode=3, fut_ts=6, 2]
+                - 'all_cls_scores', 'all_bbox_preds': 检测结果
+                - 'map_all_cls_scores', 'map_all_pts_preds': 地图结果
+                - 'all_traj_preds', 'all_traj_cls_scores': 运动预测结果
+                - 'bev_embed': BEV 特征（可用于 BEV 级辅助任务）
+        ================================================================"""
+
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         dtype = mlvl_feats[0].dtype
         object_query_embeds = self.query_embedding.weight.to(dtype)
@@ -518,7 +574,10 @@ class VADHead(DETRHead):
         bev_mask = torch.zeros((bs, self.bev_h, self.bev_w),
                                device=bev_queries.device).to(dtype)
         bev_pos = self.positional_encoding(bev_mask).to(dtype)
-            
+
+        # ==================== 阶段 1: BEV 编码 ====================
+        # 多视角图像特征 → BEVFormer Encoder（时序自注意力 + 空间交叉注意力）
+        # → BEV 特征 [bev_h*bev_w, B, D] + 检测/地图 query 的中间状态
         if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
             return self.transformer.get_bev_features(
                 mlvl_feats,
@@ -550,9 +609,14 @@ class VADHead(DETRHead):
                 prev_bev=prev_bev
         )
 
+        # Transformer 输出: BEV 特征 + 检测/地图 query 的中间状态
         bev_embed, hs, init_reference, inter_references, \
             map_hs, map_init_reference, map_inter_references = outputs
 
+        # ==================== 阶段 2: 检测解码 ====================
+        # 对每个 decoder 层，将 object query 特征 hs 通过分类/回归分支
+        # → outputs_classes: [nb_dec=3, B, num_query=300, cls_out]
+        # → outputs_coords:  [nb_dec=3, B, num_query=300, 10]  (cx,cy,w,l,cz,h,yaw,vx,vy)
         hs = hs.permute(0, 2, 1, 3)
         outputs_classes = []
         outputs_coords = []
@@ -594,6 +658,10 @@ class VADHead(DETRHead):
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
         
+        # ==================== 阶段 3: 地图解码 ====================
+        # 对每个 decoder 层，将 map query 特征通过地图分类/回归分支
+        # → map_outputs_classes:   [nb_dec, B, num_vec=20, map_cls=3]
+        # → map_outputs_pts_coords: [nb_dec, B, num_vec, pts_per_vec, 2]  (车道线点坐标)
         for lvl in range(map_hs.shape[0]):
             if lvl == 0:
                 reference = map_init_reference
@@ -614,6 +682,11 @@ class VADHead(DETRHead):
             map_outputs_coords.append(map_outputs_coord)
             map_outputs_pts_coords.append(map_outputs_pts_coord)
             
+        # ==================== 阶段 4: 运动预测 ====================
+        # agent query 多模态扩展（fut_mode=6 种运动模式）
+        # → 自注意 + 地图交叉注意力 → motion_hs [B, num_agent, fut_mode, 2D]
+        # → traj_branches: 轨迹回归 [B, A, fut_mode, fut_ts*2]
+        # → traj_cls_branches: 轨迹模式分类 [B, A, fut_mode]
         if self.motion_decoder is not None:
             batch_size, num_agent = outputs_coords_bev[-1].shape[:2]
             # motion_query
@@ -706,12 +779,26 @@ class VADHead(DETRHead):
         outputs_trajs = torch.stack(outputs_trajs)
         outputs_trajs_classes = torch.stack(outputs_trajs_classes)
 
+        # ==================== 阶段 5: 自车规划（核心 — ★ 扩展点 2） ====================
+        # 
+        # 子阶段 5a: 自车历史编码 → ego_his_feats [B, 1, D]
+        # 子阶段 5b: ego ↔ agent 交叉注意力 → ego_agent_query [1, B, D]
+        # 子阶段 5c: ego ↔ map 交叉注意力 → ego_map_query [1, B, D]
+        # 子阶段 5d: 特征拼接 ego_feats = concat(ego特征, ego_map_query) → [B, 1, 2D]
+        # 子阶段 5e: ego_fut_decoder(ego_feats) → 规划轨迹 [B, ego_fut_mode=3, fut_ts=6, 2]
+        #
+        # NOTE: [扩展点 2] 在调用 self.ego_fut_decoder 时（约 L860-864），
+        #   ego_feats 张量 [B, 1, 2D] 已经包含了自车对 agent 和地图的全部感知信息。
+        #   在这里并行调用新的辅助头（硬约束/常识蒸馏头），将额外的预测存入 outs 字典。
+        # ================================================================
         # planning
         (batch, num_agent) = motion_hs.shape[:2]
+        # —— 子阶段 5a: 自车历史编码（或可学习 ego_query 嵌入） ——
         if self.ego_his_encoder is not None:
             ego_his_feats = self.ego_his_encoder(ego_his_trajs)  # [B, 1, dim]
         else:
             ego_his_feats = self.ego_query.weight.unsqueeze(0).repeat(batch, 1, 1)
+        # —— 子阶段 5b: ego ↔ agent 交叉注意力 ——
         # Interaction
         ego_query = ego_his_feats
         ego_pos = torch.zeros((batch, 1, 2), device=ego_query.device)
@@ -734,6 +821,7 @@ class VADHead(DETRHead):
             key_pos=agent_pos_emb.permute(1, 0, 2),
             key_padding_mask=agent_mask)
 
+        # —— 子阶段 5c: ego ↔ map 交叉注意力 ——
         # ego <-> map interaction
         ego_pos = torch.zeros((batch, 1, 2), device=agent_query.device)
         ego_pos_emb = self.ego_map_pos_mlp(ego_pos)
@@ -761,6 +849,9 @@ class VADHead(DETRHead):
             key_pos=map_pos_emb.permute(1, 0, 2),
             key_padding_mask=map_mask)
 
+        # —— 子阶段 5d: 特征拼接，组装 ego_feats 张量 [B, 1, 2D] ——
+        # ego_feats 融合了自车历史、agent 交互、地图交互的全部信息
+        # ★ 如果要添加新的辅助头，这个张量就是你的输入！
         if self.ego_his_encoder is not None and self.ego_lcf_feat_idx is not None:
             ego_feats = torch.cat(
                 [ego_his_feats,
@@ -788,11 +879,18 @@ class VADHead(DETRHead):
                 dim=-1
             )  # [B, 1, 2D]  
 
+        # —— 子阶段 5e: ego_fut_decoder 解码为规划轨迹 ——
+        # 输入: ego_feats [B, 1, 2D]
+        # 输出: ego_fut_trajs [B, ego_fut_mode=3, fut_ts=6, 2]
+        # ego_fut_mode: 3（左转/直行/右转），fut_ts: 6（未来 3 秒，每步 0.5s）
         # Ego prediction
         outputs_ego_trajs = self.ego_fut_decoder(ego_feats)
         outputs_ego_trajs = outputs_ego_trajs.reshape(outputs_ego_trajs.shape[0], 
                                                       self.ego_fut_mode, self.fut_ts, 2)
 
+        # ==================== 阶段 6: 输出组装 ====================
+        # 将所有预测结果打包为 outs 字典，供 loss() 和 get_bboxes() 使用
+        # 如果你在阶段 5 添加了新的辅助头输出，也要加入到此字典中！
         outs = {
             'bev_embed': bev_embed,
             'all_cls_scores': outputs_classes,
@@ -1116,23 +1214,38 @@ class VADHead(DETRHead):
                       agent_fut_preds,
                       agent_score_preds,
                       agent_fut_cls_preds):
-        """"Loss function for ego vehicle planning.
+        """规划损失函数——4 个约束项。
+        
+        ==================== 4 个规划损失详解 ====================
+        1. loss_plan_reg:   L1 回归损失
+           比较预测轨迹与 GT 专家轨迹的各点位置偏差
+           权重: 由 ego_fut_cmd（高层指令）和 ego_fut_masks（有效时间步）共同决定
+        
+        2. loss_plan_bound: 道路边界约束损失
+           确保预测轨迹不穿越车道线/道路边界
+        
+        3. loss_plan_col:   碰撞避免损失
+           确保自车轨迹与周围预测 agent 保持安全距离
+        
+        4. loss_plan_dir:   方向一致性损失
+           自车轨迹方向应与车道方向一致
+        
+        仅使用与 GT 指令匹配的 ego_fut_mode 对应的轨迹（ego_fut_cmd==1）
+        ===============================================================
+        
         Args:
-            ego_fut_preds (Tensor): [B, ego_fut_mode, fut_ts, 2]
-            ego_fut_gt (Tensor): [B, fut_ts, 2]
-            ego_fut_masks (Tensor): [B, fut_ts]
-            ego_fut_cmd (Tensor): [B, ego_fut_mode]
-            lane_preds (Tensor): [B, num_vec, num_pts, 2]
-            lane_score_preds (Tensor): [B, num_vec, 3]
-            agent_preds (Tensor): [B, num_agent, 2]
-            agent_fut_preds (Tensor): [B, num_agent, fut_mode, fut_ts, 2]
-            agent_score_preds (Tensor): [B, num_agent, 10]
-            agent_fut_cls_scores (Tensor): [B, num_agent, fut_mode]
+            ego_fut_preds (Tensor): [B, ego_fut_mode=3, fut_ts=6, 2] — 3 种指令的轨迹
+            ego_fut_gt (Tensor): [B, fut_ts=6, 2] — GT 专家轨迹
+            ego_fut_masks (Tensor): [B, fut_ts=6] — 有效时间步掩码（0 表示该帧无效）
+            ego_fut_cmd (Tensor): [B, ego_fut_mode=3] — GT 高层指令 one-hot
+            lane_preds (Tensor): [B, num_vec, num_pts, 2] — 车道线预测
+            lane_score_preds (Tensor): [B, num_vec, 3] — 车道线类别分数
+            agent_preds (Tensor): [B, num_agent, 2] — agent 位置
+            agent_fut_preds (Tensor): [B, num_agent, fut_mode, fut_ts, 2] — agent 未来轨迹
+            agent_score_preds (Tensor): [B, num_agent, 10] — agent 类别分数
+            agent_fut_cls_preds (Tensor): [B, num_agent, fut_mode] — agent 轨迹模式分数
         Returns:
-            loss_plan_reg (Tensor): planning reg loss.
-            loss_plan_bound (Tensor): planning map boundary constraint loss.
-            loss_plan_col (Tensor): planning col constraint loss.
-            loss_plan_dir (Tensor): planning directional constraint loss.
+            dict: {loss_plan_reg, loss_plan_bound, loss_plan_col, loss_plan_dir}
         """
 
         ego_fut_gt = ego_fut_gt.unsqueeze(1).repeat(1, self.ego_fut_mode, 1, 1)
@@ -1486,6 +1599,17 @@ class VADHead(DETRHead):
 
         return loss_cls, loss_bbox, loss_iou, loss_pts, loss_dir
 
+    # ==================== 损失函数入口 ====================
+    # 从 preds_dicts 中提取所有预测，计算 4 类损失并返回 loss_dict：
+    #   1. 检测损失: loss_cls, loss_bbox
+    #   2. 地图损失: loss_map_cls, loss_map_bbox, loss_map_iou, loss_map_pts, loss_map_dir
+    #   3. 运动损失: loss_traj, loss_traj_cls
+    #   4. 规划损失: loss_plan_reg, loss_plan_bound, loss_plan_col, loss_plan_dir
+    #
+    # NOTE: [扩展点 4] 如果你想添加辅助损失，在 loss_planning 之后（约 L1708）
+    #   计算你的损失，并添加到 loss_dict 中。
+    #   mmcv Runner 会对 loss_dict 所有值求和后自动 backward。
+    # ===============================================================
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self,
              gt_bboxes_list,
@@ -1618,6 +1742,17 @@ class VADHead(DETRHead):
         loss_dict['loss_map_pts'] = map_losses_pts[-1]
         loss_dict['loss_map_dir'] = map_losses_dir[-1]
 
+        # ==================== 规划损失（4 个项） ====================
+        # loss_plan_reg:   轨迹回归 L1 损失（与 GT 轨迹比较）
+        # loss_plan_bound: 道路边界约束（防止自车穿越车道边界）
+        # loss_plan_col:   碰撞避免损失（保持与周围 agent 的距离）
+        # loss_plan_dir:   方向一致性损失（自车朝向应与车道方向一致）
+        #
+        # NOTE: [扩展点 4] 在下面 self.loss_planning 调用之后（L1750），
+        #   添加你的辅助损失计算，并将结果写入 loss_dict：
+        #   aux_loss = self.my_aux_loss(aux_preds, aux_gt)
+        #   loss_dict['loss_aux'] = aux_loss
+        # ===============================================================
         # Planning Loss
         ego_fut_gt = ego_fut_gt.squeeze(1)
         ego_fut_masks = ego_fut_masks.squeeze(1).squeeze(1)
