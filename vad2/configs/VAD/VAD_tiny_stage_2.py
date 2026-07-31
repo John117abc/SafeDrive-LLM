@@ -42,7 +42,7 @@ _num_levels_ = 1
 bev_h_ = 100
 bev_w_ = 100
 queue_length = 3 # each sequence contains `queue_length` frames.
-total_epochs = 12
+total_epochs = 24  # 阶段 2 训练轮数（从 12 增加到 24，为物理约束头提供充足训练时间）
 
 model = dict(
     type='VAD',
@@ -287,7 +287,14 @@ model = dict(
         loss_plan_reg=dict(type='L1Loss', loss_weight=1.0),
         loss_plan_bound=dict(type='PlanMapBoundLoss', loss_weight=1.0, dis_thresh=1.0),
         loss_plan_col=dict(type='PlanCollisionLoss', loss_weight=1.0),
-        loss_plan_dir=dict(type='PlanMapDirectionLoss', loss_weight=0.5)),
+        loss_plan_dir=dict(type='PlanMapDirectionLoss', loss_weight=0.5),
+        # 物理约束头损失（新增，仅阶段 2 开启）
+        # κ_max: 原始 MSE ~0.01 × 10.0 = 0.1（量级对齐）
+        # ω_max: 原始 MSE ~0.05 × 5.0  = 0.25（量级对齐）
+        # P_AEB: BCE 自然量级 ~0.7 × 0.5 = 0.35
+        loss_phys_kappa=dict(type='MSELoss', loss_weight=10.0),
+        loss_phys_omega=dict(type='MSELoss', loss_weight=5.0),
+        loss_phys_aeb=dict(type='CrossEntropyLoss', loss_weight=0.5, use_sigmoid=True)),
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],
@@ -324,7 +331,8 @@ train_pipeline = [
     dict(type='CustomDefaultFormatBundle3D', class_names=class_names, with_ego=True),
     dict(type='CustomCollect3D',\
          keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'ego_his_trajs',
-               'ego_fut_trajs', 'ego_fut_masks', 'ego_fut_cmd', 'ego_lcf_feat', 'gt_attr_labels'])
+               'ego_fut_trajs', 'ego_fut_masks', 'ego_fut_cmd', 'ego_lcf_feat',
+               'gt_attr_labels', 'phys_kappa_max', 'phys_omega_max', 'phys_p_aeb'])
 ]
 
 test_pipeline = [

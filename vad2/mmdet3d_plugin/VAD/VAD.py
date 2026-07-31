@@ -138,7 +138,8 @@ class VAD(MVXTwoStageDetector):
                           ego_fut_masks=None,
                           ego_fut_cmd=None,
                           ego_lcf_feat=None,
-                          gt_attr_labels=None):
+                          gt_attr_labels=None,
+                          **kwargs):
         """感知+规划的核心前向传播 + 损失计算。
 
         两阶段调用模式：
@@ -162,7 +163,7 @@ class VAD(MVXTwoStageDetector):
             gt_bboxes_3d, gt_labels_3d, map_gt_bboxes_3d, map_gt_labels_3d,
             outs, ego_fut_trajs, ego_fut_masks, ego_fut_cmd, gt_attr_labels
         ]
-        losses = self.pts_bbox_head.loss(*loss_inputs, img_metas=img_metas)
+        losses = self.pts_bbox_head.loss(*loss_inputs, img_metas=img_metas, **kwargs)
         return losses
 
     def forward_dummy(self, img):
@@ -225,7 +226,8 @@ class VAD(MVXTwoStageDetector):
                       ego_fut_masks=None,
                       ego_fut_cmd=None,
                       ego_lcf_feat=None,
-                      gt_attr_labels=None
+                      gt_attr_labels=None,
+                      **kwargs
                       ):
         """训练前向入口 —— 从图像到损失的完整链路。
 
@@ -267,7 +269,8 @@ class VAD(MVXTwoStageDetector):
                                             gt_bboxes_ignore, map_gt_bboxes_ignore, prev_bev,
                                             ego_his_trajs=ego_his_trajs, ego_fut_trajs=ego_fut_trajs,
                                             ego_fut_masks=ego_fut_masks, ego_fut_cmd=ego_fut_cmd,
-                                            ego_lcf_feat=ego_lcf_feat, gt_attr_labels=gt_attr_labels)
+                                            ego_lcf_feat=ego_lcf_feat, gt_attr_labels=gt_attr_labels,
+                                            **kwargs)
 
         losses.update(losses_pts)
         return losses

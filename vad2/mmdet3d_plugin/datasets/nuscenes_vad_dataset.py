@@ -1390,6 +1390,49 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         lidar2global = ego2global @ lidar2ego
         input_dict['lidar2global'] = lidar2global
 
+        # 实时计算物理约束标签（训练时使用）
+        # 从原始 info 中提取 ego + agent 数据，通过运动学公式计算
+        # 标签用于训练 PhysicalHead（κ_max / ω_max / P_AEB）
+        if not self.test_mode:
+            try:
+                from mining.utils import compute_physical_labels
+
+                ego_lcf = info['gt_ego_lcf_feat']
+                ego_speed = float(ego_lcf[7])                                     # 标量速度 (m/s)
+                ego_vel = np.array(ego_lcf[:2], dtype=np.float32)                 # [vx, vy]
+                ego_pos = np.array(info['lidar2ego_translation'][:2],
+                                   dtype=np.float32)                               # ego 在 LiDAR 帧位置
+                ego_heading = float(info['can_bus'][16])                           # yaw (rad)
+
+                gt_boxes = info['gt_boxes']                                        # (N, 7)
+                gt_velocity = info['gt_velocity']                                  # (N, 2)
+
+                # 过滤有效 agent（去掉 num_lidar_pts=0 的无效框）
+                valid_mask = info['valid_flag'] if self.use_valid_flag \
+                    else info['num_lidar_pts'] > 0
+                agent_positions = gt_boxes[valid_mask, :2]
+                agent_velocities = gt_velocity[valid_mask, :2]
+
+                physical = compute_physical_labels(
+                    ego_speed=ego_speed,
+                    ego_pos=ego_pos,
+                    ego_vel=ego_vel,
+                    agent_positions=agent_positions,
+                    agent_velocities=agent_velocities,
+                    ego_heading=ego_heading,
+                )
+
+                input_dict['phys_kappa_max'] = np.float32(
+                    physical['kappa_max'] if np.isfinite(physical['kappa_max']) else 10.0
+                )
+                input_dict['phys_omega_max'] = np.float32(physical['omega_max'])
+                input_dict['phys_p_aeb'] = np.float32(physical['p_aeb'])
+            except Exception as e:
+                # 降级: 如果计算失败（如导入失败），使用默认安全值
+                input_dict['phys_kappa_max'] = np.float32(10.0)
+                input_dict['phys_omega_max'] = np.float32(0.5)
+                input_dict['phys_p_aeb'] = np.float32(0.0)
+
         return input_dict
 
     def __getitem__(self, idx):

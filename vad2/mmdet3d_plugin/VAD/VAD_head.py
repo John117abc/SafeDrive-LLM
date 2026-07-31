@@ -159,6 +159,9 @@ class VADHead(DETRHead):
                  loss_plan_bound=dict(type='PlanMapBoundLoss', loss_weight=0.1),
                  loss_plan_col=dict(type='PlanAgentDisLoss', loss_weight=0.1),
                  loss_plan_dir=dict(type='PlanMapThetaLoss', loss_weight=0.1),
+                 loss_phys_kappa=None,
+                 loss_phys_omega=None,
+                 loss_phys_aeb=None,
                  ego_agent_decoder=None,
                  ego_map_decoder=None,
                  query_thresh=None,
@@ -304,6 +307,11 @@ class VADHead(DETRHead):
         self.loss_plan_bound = build_loss(loss_plan_bound)
         self.loss_plan_col = build_loss(loss_plan_col)
         self.loss_plan_dir = build_loss(loss_plan_dir)
+        # ==================== 物理约束损失注册 [扩展点 3] ====================
+        self.loss_phys_kappa = build_loss(loss_phys_kappa) if loss_phys_kappa is not None else None
+        self.loss_phys_omega = build_loss(loss_phys_omega) if loss_phys_omega is not None else None
+        self.loss_phys_aeb = build_loss(loss_phys_aeb) if loss_phys_aeb is not None else None
+        # ================================================================
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -460,6 +468,20 @@ class VADHead(DETRHead):
         # 输出: ego_fut_trajs [B, ego_fut_mode=3, fut_ts=6, 2]
         # ego_fut_mode: 3 个高层指令（左转/直行/右转）
         # fut_ts: 未来 6 个时间步（每步 0.5s，共 3 秒）
+
+        # ==================== 物理约束头 [扩展点 1] ====================
+        # 从 ego_feats 预测 3 维物理风险信号（κ_max / a_brake_max / P_AEB）
+        # 与规划头共享 ego_feats 输入，并行输出
+        self.physical_head = None
+        try:
+            from model.vad2_with_heads import PhysicalHead
+            self.physical_head = PhysicalHead(
+                in_dim=self.embed_dims * 2,
+                hidden_dims=[256, 128],
+            )
+        except ImportError:
+            pass
+
         ego_fut_decoder = []
         ego_fut_dec_in_dim = self.embed_dims*2 + len(self.ego_lcf_feat_idx) \
             if self.ego_lcf_feat_idx is not None else self.embed_dims*2
@@ -885,6 +907,13 @@ class VADHead(DETRHead):
         # ego_fut_mode: 3（左转/直行/右转），fut_ts: 6（未来 3 秒，每步 0.5s）
         # Ego prediction
         outputs_ego_trajs = self.ego_fut_decoder(ego_feats)
+
+        # —— [扩展点 2] 物理约束头前向 ——
+        # 输入: ego_feats [B, 1, 2D]（与规划头相同的输入）
+        # 输出: {'kappa_max', 'a_brake_max', 'p_aeb'} 各 [B, 1]
+        phys_preds = None
+        if self.physical_head is not None:
+            phys_preds = self.physical_head(ego_feats)
         outputs_ego_trajs = outputs_ego_trajs.reshape(outputs_ego_trajs.shape[0], 
                                                       self.ego_fut_mode, self.fut_ts, 2)
 
@@ -906,6 +935,7 @@ class VADHead(DETRHead):
             'map_enc_bbox_preds': None,
             'map_enc_pts_preds': None,
             'ego_fut_preds': outputs_ego_trajs,
+            'phys_preds': phys_preds,
         }
 
         return outs
@@ -1623,7 +1653,8 @@ class VADHead(DETRHead):
              gt_attr_labels,
              gt_bboxes_ignore=None,
              map_gt_bboxes_ignore=None,
-             img_metas=None):
+             img_metas=None,
+             **kwargs):
         """"Loss function.
         Args:
 
@@ -1771,6 +1802,28 @@ class VADHead(DETRHead):
         loss_dict['loss_plan_bound'] = loss_planning_dict['loss_plan_bound']
         loss_dict['loss_plan_col'] = loss_planning_dict['loss_plan_col']
         loss_dict['loss_plan_dir'] = loss_planning_dict['loss_plan_dir']
+
+        # ==================== 物理约束损失 [扩展点 4] ====================
+        # 使用 mmdet3d build_loss 模块（MSELoss / CrossEntropyLoss）
+        # loss_weight 通过 config 中 loss_phys_* 配置控制
+        phys_preds = preds_dicts.get('phys_preds', None)
+        if phys_preds is not None:
+            if self.loss_phys_kappa is not None and 'phys_kappa_max' in kwargs:
+                loss_dict['loss_phys_kappa'] = self.loss_phys_kappa(
+                    phys_preds['kappa_max'].view(-1),
+                    kwargs['phys_kappa_max'].float().view(-1),
+                )
+            if self.loss_phys_omega is not None and 'phys_omega_max' in kwargs:
+                loss_dict['loss_phys_omega'] = self.loss_phys_omega(
+                    phys_preds['omega_max'].view(-1),
+                    kwargs['phys_omega_max'].float().view(-1),
+                )
+            if self.loss_phys_aeb is not None and 'phys_p_aeb' in kwargs:
+                loss_dict['loss_phys_aeb'] = self.loss_phys_aeb(
+                    phys_preds['p_aeb'].view(-1),
+                    kwargs['phys_p_aeb'].float().view(-1),
+                )
+        # ================================================================
 
         # loss from other decoder layers
         num_dec_layer = 0
