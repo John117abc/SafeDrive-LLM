@@ -1825,6 +1825,23 @@ class VADHead(DETRHead):
                 )
         # ================================================================
 
+        # ==================== 轨迹合规损失 ====================
+        # Hinge loss: 惩罚规划轨迹违反物理头预测的安全边界
+        # L_kappa = max(0, κ_trajectory - κ_max)
+        # L_omega = max(0, |Δκ/dt| - ω_max)
+        # 梯度同时回流到规划头和物理头 — 闭环约束
+        if phys_preds is not None:
+            from model.trajectory_utils import trajectory_compliance_loss
+            loss_comp_k, loss_comp_o = trajectory_compliance_loss(
+                ego_fut_preds=ego_fut_preds,
+                ego_fut_cmd=ego_fut_cmd,
+                kappa_max=phys_preds['kappa_max'].detach(),
+                omega_max=phys_preds['omega_max'].detach(),
+            )
+            loss_dict['loss_comply_kappa'] = loss_comp_k * 5.0
+            loss_dict['loss_comply_omega'] = loss_comp_o * 5.0
+        # ================================================================
+
         # loss from other decoder layers
         num_dec_layer = 0
         for loss_cls_i, loss_bbox_i in zip(losses_cls[:-1], losses_bbox[:-1]):
