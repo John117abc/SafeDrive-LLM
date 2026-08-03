@@ -134,12 +134,14 @@
   - 专家轨迹标签（VAD 原生规划头）。
 
 ### 8.2 联合损失函数
-- L_total = L_planning + λ₁ L_physical + λ₂ L_commonsense
 
-- L_planning：VAD 原生轨迹预测损失。
-- L_physical：物理约束头多任务损失。
+- L_total = L_planning + λ₁ L_physical + λ₂ L_compliance + λ₃ L_commonsense
+
+- L_planning：VAD 原生轨迹预测损失（L1 回归 + 边界/碰撞/方向约束）。
+- L_physical：物理约束头多任务损失（MSE(κ_max, κ_gt) + MSE(ω_max, ω_gt) + BCE(P_AEB, P_AEB_gt)），驱动物理头从视觉特征中学习安全边界。
+- L_compliance：轨迹合规 Hinge 损失（max(0, κ_traj - κ_pred) + max(0, Δκ/Δt - ω_pred)），惩罚规划头输出违反物理约束的轨迹，梯度回流至规划头实现端到端可微分约束。
 - L_commonsense：常识蒸馏头多任务损失。
-- λ₁、λ₂：初始设为 0.5，后续根据实验调整。
+- λ₁、λ₂、λ₃：初始设为 0.5~5.0，后续根据实验调整。
 
 ### 8.3 训练流程
 
@@ -151,7 +153,7 @@
 ## 九、推理过程
 
 1. 视觉 backbone 提取特征 → decoder 特征。
-2. **物理硬约束头**输出四个风险信号。
+2. **物理硬约束头**输出三个风险信号（κ_max、ω_max、P_AEB）。
 3. **规划头**输出确定性未来轨迹。
 4. **安全检查与轨迹修正**：
    - 规划轨迹曲率 > κ_max → 裁剪至 κ_max。
@@ -194,7 +196,7 @@
 
 3. **结构化常识蒸馏范式**：不给 LLM 看图像，而是提供无噪声的结构化“案情简报”，消除 VLM 的几何幻觉，让 LLM 专注于常识推理。
 
-4. **协同内部化机制**：通过常识蒸馏头引导特征学习，使物理约束头从“外部强制”变为模型内部可理解的安全边界，解决了多任务冲突。
+4. **端到端物理约束学习**：将运动学公式可微分化并嵌入网络训练，通过 Hinge 合规损失将规划轨迹约束在物理头预测的安全边界内，实现了规划头与物理约束之间的闭环梯度反馈。
 
 5. **系统化数据挖掘管线**：三阶段递进式长尾危险样本挖掘（全量索引 + 危险基元初筛 + 主动学习精筛），为安全常识注入提供可复现、可扩展的数据基础。
 
@@ -265,10 +267,10 @@ SafeDrive-LLM/
 │   │   └── merged_model/       # 合并后权重
 │   └── utils.py                # JSON 解析、输出校验
 │
-├── model/                      # 模型改造（基于 VAD 系列，待实现）
-│   ├── vad2_with_heads.py      # 添加硬约束头 + 常识蒸馏头的模型定义
-│   ├── losses.py               # 联合损失函数（L_planning + λ1 L_hard + λ2 L_common）
-│   └── dataloader.py           # 混合数据加载器（nuScenes + 增强仿真）
+├── model/                      # 模型改造（基于 VAD 系列）
+│   ├── vad2_with_heads.py      # PhysicalHead 网络模块（κ_max/ω_max/P_AEB 三维输出）✅
+│   ├── trajectory_utils.py     # 轨迹曲率计算 + 合规 Hinge 损失 ✅
+│   └── dataloader.py           # 混合数据加载器（nuScenes + 增强仿真）（待实现）
 │
 ├── train/                      # 联合训练（待实现）
 │   ├── train_joint.py          # 联合训练主脚本
