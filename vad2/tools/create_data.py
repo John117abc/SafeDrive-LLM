@@ -4,7 +4,7 @@
 #  Modified by Zhiqi Li
 # ---------------------------------------------
 from data_converter.create_gt_database import create_groundtruth_database
-from data_converter import nuscenes_converter as nuscenes_converter
+from data_converter import vad_nuscenes_converter as nuscenes_converter
 from data_converter import lyft_converter as lyft_converter
 from data_converter import kitti_converter as kitti
 from data_converter import indoor_converter as indoor
@@ -226,9 +226,9 @@ parser.add_argument(
 parser.add_argument('--extra-tag', type=str, default='kitti')
 parser.add_argument(
     '--workers', type=int, default=4, help='number of threads to be used')
-args = parser.parse_args()
 
 if __name__ == '__main__':
+    args = parser.parse_args()
     if args.dataset == 'kitti':
         kitti_data_prep(
             root_path=args.root_path,

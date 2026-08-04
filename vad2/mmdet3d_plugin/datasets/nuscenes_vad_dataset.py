@@ -663,6 +663,8 @@ class VectorizedLocalMap(object):
         # import pdb;pdb.set_trace()
         ped = ped_geom[0][1]
         union_segments = ops.unary_union(ped)
+        if union_segments is None or union_segments.is_empty:
+            return []
         max_x = self.patch_size[1] / 2
         max_y = self.patch_size[0] / 2
         # local_patch = box(-max_x + 0.2, -max_y + 0.2, max_x - 0.2, max_y - 0.2)
@@ -702,6 +704,8 @@ class VectorizedLocalMap(object):
         union_roads = ops.unary_union(roads)
         union_lanes = ops.unary_union(lanes)
         union_segments = ops.unary_union([union_roads, union_lanes])
+        if union_segments is None or union_segments.is_empty:
+            return []
         max_x = self.patch_size[1] / 2
         max_y = self.patch_size[0] / 2
         local_patch = box(-max_x + 0.2, -max_y + 0.2, max_x - 0.2, max_y - 0.2)
@@ -933,7 +937,7 @@ class v1CustomDetectionConfig:
         self.max_boxes_per_sample = max_boxes_per_sample
         self.mean_ap_weight = mean_ap_weight
 
-        self.class_names = self.class_range_y.keys()
+        self.class_names = list(self.class_range_y.keys())
 
     def __eq__(self, other):
         eq = True

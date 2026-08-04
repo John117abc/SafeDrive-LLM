@@ -313,7 +313,8 @@ model = dict(
         loss_plan_reg=dict(type='L1Loss', loss_weight=0.0),
         loss_plan_bound=dict(type='PlanMapBoundLoss', loss_weight=0.0),
         loss_plan_col=dict(type='PlanCollisionLoss', loss_weight=0.0),
-        loss_plan_dir=dict(type='PlanMapDirectionLoss', loss_weight=0.0)),
+        loss_plan_dir=dict(type='PlanMapDirectionLoss', loss_weight=0.0),
+        use_physical_head=False),
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],
@@ -387,7 +388,7 @@ data = dict(
     train=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'vad_nuscenes_infos_temporal_train.pkl',
+        ann_file='/root/autodl-tmp/data/nuscenes_pkls/vad_nuscenes_infos_temporal_train.pkl',
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -406,7 +407,7 @@ data = dict(
     val=dict(type=dataset_type,
              data_root=data_root,
              pc_range=point_cloud_range,
-             ann_file=data_root + 'vad_nuscenes_infos_temporal_val.pkl',
+             ann_file='/root/autodl-tmp/data/nuscenes_pkls/vad_nuscenes_infos_temporal_val.pkl',
              pipeline=test_pipeline,  bev_size=(bev_h_, bev_w_),
              classes=class_names, modality=input_modality, samples_per_gpu=1,
              map_classes=map_classes,
@@ -418,7 +419,7 @@ data = dict(
     test=dict(type=dataset_type,
               data_root=data_root,
               pc_range=point_cloud_range,
-              ann_file=data_root + 'vad_nuscenes_infos_temporal_val.pkl',
+              ann_file='/root/autodl-tmp/data/nuscenes_pkls/vad_nuscenes_infos_temporal_val.pkl',
               pipeline=test_pipeline, bev_size=(bev_h_, bev_w_),
               classes=class_names, modality=input_modality, samples_per_gpu=1,
               map_classes=map_classes,

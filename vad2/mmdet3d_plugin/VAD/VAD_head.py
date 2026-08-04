@@ -162,6 +162,7 @@ class VADHead(DETRHead):
                  loss_phys_kappa=None,
                  loss_phys_omega=None,
                  loss_phys_aeb=None,
+                 use_physical_head=False,
                  ego_agent_decoder=None,
                  ego_map_decoder=None,
                  query_thresh=None,
@@ -312,6 +313,19 @@ class VADHead(DETRHead):
         self.loss_phys_omega = build_loss(loss_phys_omega) if loss_phys_omega is not None else None
         self.loss_phys_aeb = build_loss(loss_phys_aeb) if loss_phys_aeb is not None else None
         # ================================================================
+
+        self.use_physical_head = use_physical_head
+
+        self.physical_head = None
+        if self.use_physical_head:
+            try:
+                from model.vad2_with_heads import PhysicalHead
+                self.physical_head = PhysicalHead(
+                    in_dim=self.embed_dims * 2,
+                    hidden_dims=[256, 128],
+                )
+            except ImportError:
+                pass
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -468,19 +482,6 @@ class VADHead(DETRHead):
         # 输出: ego_fut_trajs [B, ego_fut_mode=3, fut_ts=6, 2]
         # ego_fut_mode: 3 个高层指令（左转/直行/右转）
         # fut_ts: 未来 6 个时间步（每步 0.5s，共 3 秒）
-
-        # ==================== 物理约束头 [扩展点 1] ====================
-        # 从 ego_feats 预测 3 维物理风险信号（κ_max / a_brake_max / P_AEB）
-        # 与规划头共享 ego_feats 输入，并行输出
-        self.physical_head = None
-        try:
-            from model.vad2_with_heads import PhysicalHead
-            self.physical_head = PhysicalHead(
-                in_dim=self.embed_dims * 2,
-                hidden_dims=[256, 128],
-            )
-        except ImportError:
-            pass
 
         ego_fut_decoder = []
         ego_fut_dec_in_dim = self.embed_dims*2 + len(self.ego_lcf_feat_idx) \

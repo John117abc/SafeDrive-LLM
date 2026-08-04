@@ -245,3 +245,5 @@ train/logs/
 AGENTS.md
 
 test/
+data/nuscenes
+work_dirs/
