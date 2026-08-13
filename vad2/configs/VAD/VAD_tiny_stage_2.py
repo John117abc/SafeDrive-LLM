@@ -12,7 +12,7 @@ point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
 voxel_size = [0.15, 0.15, 4]
 
 img_norm_cfg = dict(
-    mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 # For nuScenes we usually do 10-class detection
 class_names = [
     'car', 'truck', 'construction_vehicle', 'bus', 'trailer', 'barrier',
@@ -292,9 +292,10 @@ model = dict(
         # κ_max: 原始 MSE ~0.01 × 10.0 = 0.1（量级对齐）
         # ω_max: 原始 MSE ~0.05 × 5.0  = 0.25（量级对齐）
         # P_AEB: BCE 自然量级 ~0.7 × 0.5 = 0.35
-        loss_phys_kappa=dict(type='MSELoss', loss_weight=10.0),
-        loss_phys_omega=dict(type='MSELoss', loss_weight=5.0),
-        loss_phys_aeb=dict(type='CrossEntropyLoss', loss_weight=0.5, use_sigmoid=True)),
+        loss_phys_kappa=dict(type='MSELoss', loss_weight=1.0),
+        loss_phys_omega=dict(type='MSELoss', loss_weight=0.5),
+        loss_phys_aeb=dict(type='CrossEntropyLoss', loss_weight=0.5, use_sigmoid=True),
+        use_physical_head=True),
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],
@@ -368,7 +369,7 @@ data = dict(
     train=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'vad_nuscenes_infos_temporal_train.pkl',
+        ann_file='/root/autodl-tmp/data/nuscenes_pkls/vad_nuscenes_infos_temporal_train.pkl',
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -399,7 +400,7 @@ data = dict(
     test=dict(type=dataset_type,
               data_root=data_root,
               pc_range=point_cloud_range,
-              ann_file=data_root + 'vad_nuscenes_infos_temporal_val.pkl',
+              ann_file='/root/autodl-tmp/data/nuscenes_pkls/vad_nuscenes_infos_temporal_val.pkl',
               pipeline=test_pipeline, bev_size=(bev_h_, bev_w_),
               classes=class_names, modality=input_modality, samples_per_gpu=1,
               map_classes=map_classes,
@@ -433,7 +434,7 @@ lr_config = dict(
 evaluation = dict(interval=total_epochs, pipeline=test_pipeline, metric='bbox', map_metric='chamfer')
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from = 'ckpts/VAD_tiny_stage_1.pth'
+load_from = 'work_dirs/stage1_full/epoch_48.pth'
 log_config = dict(
     interval=100,
     hooks=[
@@ -441,8 +442,8 @@ log_config = dict(
         dict(type='TensorboardLoggerHook')
     ])
 # fp16 = dict(loss_scale=512.)
-# find_unused_parameters = True
-checkpoint_config = dict(interval=1, max_keep_ckpts=total_epochs)
+find_unused_parameters = True
+checkpoint_config = dict(interval=1, max_keep_ckpts=10)
 
 
 custom_hooks = [dict(type='CustomSetEpochInfoHook')]

@@ -1839,8 +1839,8 @@ class VADHead(DETRHead):
                 kappa_max=phys_preds['kappa_max'].detach(),
                 omega_max=phys_preds['omega_max'].detach(),
             )
-            loss_dict['loss_comply_kappa'] = loss_comp_k * 5.0
-            loss_dict['loss_comply_omega'] = loss_comp_o * 5.0
+            loss_dict['loss_comply_kappa'] = loss_comp_k * 1.0
+            loss_dict['loss_comply_omega'] = loss_comp_o * 1.0
         # ================================================================
 
         # loss from other decoder layers

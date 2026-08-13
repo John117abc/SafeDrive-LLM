@@ -30,7 +30,7 @@ def compute_curvature(trajs: torch.Tensor) -> torch.Tensor:
     s = (a + b + c) / 2
     area_sq = s * (s - a) * (s - b) * (s - c)
     area_sq = torch.clamp(area_sq, min=0.0)  # 数值安全
-    area = torch.sqrt(area_sq)                # [B, T-2]
+    area = torch.sqrt(area_sq + 1e-12)        # [B, T-2] 避免 sqrt(0) 梯度 inf
 
     # κ = 4 * area / (a * b * c)
     denominator = a * b * c

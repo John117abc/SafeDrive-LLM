@@ -531,6 +531,28 @@ def _fill_trainval_infos(nusc,
             info['gt_ego_fut_cmd'] = command.astype(np.float32)
             info['gt_ego_lcf_feat'] = ego_lcf_feat.astype(np.float32)
 
+            # ========== 物理约束标签计算 ==========
+            ego_speed = math.sqrt(ego_vx**2 + ego_vy**2)
+            phys_kappa_max = 0.7 * 9.81 / max(ego_speed**2, 0.1)
+            phys_kappa_max = min(phys_kappa_max, 2.0)
+            phys_omega_max = max(0.1, min(1.0, 5.0 / max(abs(ego_speed), 0.1)))
+            phys_p_aeb = 0
+            if not test:
+                for i in range(len(locs)):
+                    dx = locs[i, 0]
+                    dy = locs[i, 1]
+                    if dx > 0 and dx < 30:
+                        closing_speed = ego_vx - velocity[i, 0]
+                        if closing_speed > 0:
+                            ttc = dx / closing_speed
+                            if ttc < 0.5 and abs(dy) < ego_width / 2 + dims[i, 1] / 2:
+                                phys_p_aeb = 1
+                                break
+            info['phys_kappa_max'] = np.float32(phys_kappa_max)
+            info['phys_omega_max'] = np.float32(phys_omega_max)
+            info['phys_p_aeb'] = np.float32(phys_p_aeb)
+            # =====================================
+
         if sample['scene_token'] in train_scenes:
             train_nusc_infos.append(info)
         else:

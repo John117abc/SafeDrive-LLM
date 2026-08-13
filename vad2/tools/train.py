@@ -240,6 +240,13 @@ def main():
         test_cfg=cfg.get('test_cfg'))
     model.init_weights()
 
+    if cfg.get('load_from', None):
+        logger.info(f'Loading checkpoint from {cfg.load_from}')
+        ckpt = torch.load(cfg.load_from, map_location='cpu')
+        model.load_state_dict(ckpt['state_dict'], strict=False)
+        cfg.load_from = None
+        logger.info('Checkpoint loaded.')
+
     logger.info(f'Model:\n{model}')
     datasets = [build_dataset(cfg.data.train)]
     if len(cfg.workflow) == 2:
