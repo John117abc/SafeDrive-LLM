@@ -42,9 +42,10 @@
   - 道路结构：当前车道类型、前方路口距离、信号灯状态。
   - 可见性：各象限是否存在视线遮挡。
 - **同步生成物理约束头标签**：
-  - 最大安全曲率 κ_max = μ·g / v²。
+  - 最大安全曲率 κ_max = μ·g / v²（实现时 min_speed=0.1 防除零，上限裁剪至 2.0）。
   - 最大方向盘转速 ω_max = max(0.1, min(1.0, 5.0 / |v|))。
   - 紧急制动概率 P_AEB：若存在物体 TTC < 0.5s 且无横向避让空间 → 1，否则 → 0。
+- **实现位置**：物理标签直接在数据转换器 `vad2/tools/data_converter/vad_nuscenes_converter.py` 中离线生成，写入 pkl 索引文件（无需额外 mining 管线）。
 
 ### 第二遍：危险基元触发 + 初步筛选
 
@@ -109,6 +110,11 @@
 | 紧急制动概率 P_AEB | 1 | 当前是否需要立刻触发 AEB | TTC < 0.5s 且无避让空间 → 1 |
 
 - **训练损失**：`L_physical = MSE(κ_max) + MSE(ω_max) + BCE(P_AEB)`
+- **实际损失权重**（经实验调试确定）：
+  - `loss_phys_kappa` = MSE × **1.0**（原设计 10.0，为控制梯度爆炸而降权）
+  - `loss_phys_omega` = MSE × **0.5**（原设计 5.0）
+  - `loss_phys_aeb` = BCE × **0.5**
+- **实现位置**：`model/vad2_with_heads.py`（PhysicalHead 网络）+ `vad2/mmdet3d_plugin/VAD/VAD_head.py`（损失计算）
 
 ### 7.3 常识蒸馏头
 
@@ -141,7 +147,7 @@
 - L_physical：物理约束头多任务损失（MSE(κ_max, κ_gt) + MSE(ω_max, ω_gt) + BCE(P_AEB, P_AEB_gt)），驱动物理头从视觉特征中学习安全边界。
 - L_compliance：轨迹合规 Hinge 损失（max(0, κ_traj - κ_pred) + max(0, Δκ/Δt - ω_pred)），惩罚规划头输出违反物理约束的轨迹，梯度回流至规划头实现端到端可微分约束。
 - L_commonsense：常识蒸馏头多任务损失。
-- λ₁、λ₂、λ₃：初始设为 0.5~5.0，后续根据实验调整。
+- **实际权重**（经实验调试）：物理头 κ=1.0、ω=0.5、AEB=0.5；合规损失系数 1.0（原 5.0）。常识损失 λ₃ 待实现。
 
 ### 8.3 训练流程
 
@@ -188,7 +194,44 @@
 - 时间回溯机制
 - Domain Randomization
 
-## 十一、核心贡献
+## 十一、实验进展与发现（截至 2026-08）
+
+### 11.1 已完成训练
+
+| 阶段 | 配置 | 轮数 | 权重 | 状态 |
+|:---|:---|:---|:---|:---|
+| 阶段一（感知+预测） | VAD_tiny_stage_1.py | 48 epoch | work_dirs/stage1_full/epoch_48.pth | ✅ 完成 |
+| 阶段二（+物理头） | VAD_tiny_stage_2.py | 12 epoch | work_dirs/stage2_full/epoch_12.pth | ✅ 完成 |
+| 阶段二（无物理头，消融） | VAD_tiny_stage_2_nophys.py | 12 epoch | work_dirs/stage2_nophys/epoch_12.pth | ✅ 完成 |
+
+### 11.2 评测结果
+
+| 模型 | mAP | NDS | EPA_car | L2@1s | L2@3s |
+|:---|:---|:---|:---|:---|:---|
+| 官方 VAD_tiny（BGR） | 0.270 | 0.389 | 0.598 | 0.463 | 1.122 |
+| 我们的无物理头（RGB） | 0.251 | 0.362 | 0.495 | 0.456 | 1.054 |
+| 我们的有物理头（RGB） | 0.236 | 0.343 | 0.384 | 0.685 | 1.632 |
+
+> 注：官方模型为 BGR 归一化，我们为 RGB 归一化，二者不可直接公平对比；无物理头 vs 有物理头（都 RGB）才是公平消融。
+
+### 11.3 消融发现（重要）
+
+公平消融（RGB 同归一化）显示**当前物理头方案损害了模型性能**：
+
+- `loss_phys_kappa` 训练 12 epoch 后仍不收敛（≈375），占总 loss（378）的 99%。
+- 根因：κ_max = μg/v² 由速度决定，但物理头输入 `ego_feats`（ego-agent-map 融合特征）不含显式速度信息（速度在 can_bus 分支），物理头从原理上无法学会预测 κ_max。
+- 后果：巨大的 kappa 损失梯度主导训练，通过共享 backbone 反向拖累检测/规划等所有任务。
+- `loss_phys_omega`、`loss_comply_*` 已收敛，说明物理头结构本身能学，问题仅在于 κ_max 缺输入信息。
+
+### 11.4 待定方案
+
+物理头改进方向（暂缓执行，待决策）：
+
+1. **分层方案**：κ_max/ω_max 为纯速度函数（确定性），改用公式精确计算；P_AEB 依赖 TTC（场景相关），保留网络学习。
+2. **喂速度方案**：物理头输入拼接速度（ego_lcf_feat[7] 纵向速度），让网络能学到 κ_max。
+3. **纯公式方案**：κ_max/ω_max 用公式 + 合规损失约束规划头，完全去掉物理头网络。
+
+## 十二、核心贡献
 
 1. **问题解耦**：首次将端到端驾驶的安全问题分解为物理安全（确定性）与驾驶常识（模糊性）两个独立维度，并提出异构知识注入框架。
 
@@ -200,7 +243,7 @@
 
 5. **系统化数据挖掘管线**：三阶段递进式长尾危险样本挖掘（全量索引 + 危险基元初筛 + 主动学习精筛），为安全常识注入提供可复现、可扩展的数据基础。
 
-## 十二、可参考的关键论文
+## 十三、可参考的关键论文
 
 | 论文 | 可借鉴内容 |
 |:---|:---|
@@ -209,7 +252,7 @@
 | ActiveAD (ECCV 2024) | 规划导向主动学习 |
 | Domain Randomization (Tobin et al., IROS 2017) | 域随机化基础 |
 
-## 十三、目录结构
+## 十四、目录结构
 ```
 SafeDrive-LLM/
 ├── configs/                    # 配置文件
@@ -277,8 +320,8 @@ SafeDrive-LLM/
 │   ├── train_utils.py          # 优化器、scheduler、日志
 │   └── logs/                   # TensorBoard 日志
 │
-├── eval/                       # 评测（待实现）
-│   ├── openloop/               # 开环评测
+├── eval/                       # 评测（开环评测已通过 vad2/tools/test.py 完成，对比图表见 charts/）
+│   ├── openloop/               # 开环评测（待实现自定义指标）
 │   │   ├── run_openloop.py     # 在 nuScenes 验证集评测脚本
 │   │   └── eval_metrics.py     # 危险等级、诱因准确率、注意力一致性
 │   ├── closedloop/             # 闭环评测
@@ -287,17 +330,21 @@ SafeDrive-LLM/
 │   └── ablation/               # 消融实验配置与结果
 │       ├── run_ablation.sh     # 批量运行消融实验
 │       └── results/            # 消融结果 CSV/图表
-│
+
 ├── notebooks/                  # Jupyter Notebook 探索性分析（待创建）
 │   ├── data_stats.ipynb        # 数据分布、危险样本统计
 │   └── llm_output_analysis.ipynb  # LLM 标注质量检查
-│
-├── charts/                     # 评测可视化图表
-│
+
+├── charts/                     # 评测可视化图表（✅ 已生成：损失曲线、消融对比、轨迹可视化）
+
 ├── scripts/                    # 辅助脚本
 │   ├── setup_env.sh            # 环境配置
 │   ├── download_deps.sh        # 下载依赖
-│   └── run_pipeline.sh         # 一键运行完整管线
+│   ├── run_pipeline.sh         # 一键运行完整管线
+│   ├── plot_loss_compare.py    # 损失曲线对比（phys vs nophys）✅
+│   ├── plot_eval_compare.py    # 评测指标对比柱状图 ✅
+│   ├── plot_ablation.py        # 消融对比图 ✅
+│   └── plot_trajectory_compare.py  # 规划轨迹可视化 ✅
 │
 ├── docs/                       # 设计文档
 │   ├── design.md               # 方案设计思路（待创建）
